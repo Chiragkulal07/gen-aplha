@@ -1,22 +1,19 @@
-import React, { Suspense, useEffect, useState, useCallback } from 'react';
-import { Canvas, useThree } from '@react-three/fiber';
+import React, { Suspense, useEffect, useState, useCallback, useRef } from 'react';
+import { Canvas, useThree, useFrame } from '@react-three/fiber';
 import { OrbitControls, useGLTF, useVideoTexture } from '@react-three/drei';
 import * as THREE from 'three';
 
 /* ─────────────────────────────────────────────────────────
- * CONFIGURATION — Video texture mesh targets
+ * CONFIGURATION — Video texture mesh target
  * ───────────────────────────────────────────────────────── */
 const PC_SCREEN_MESH_NAME = 'Object_34';    // ← mesh name for the PC monitor
-const WINDOW_MESH_NAME = 'Object_6';        // ← mesh name for the window glass
 
 /* ─────────────────────────────────────────────────────────
  * FRIENDLY NAMES — Maps raw mesh names to display labels.
  * Only meshes listed here will open the control panel.
- * Add more entries as you identify objects in the scene.
  * ───────────────────────────────────────────────────────── */
 const friendlyNames = {
     'Object_34': 'Smart Hub',
-    'Object_6':  'Window Display',
     'Object_49': 'Bedside Lamp',
     'Object_0':  'Room Wall',
     'Object_1':  'Floor',
@@ -35,82 +32,211 @@ const friendlyNames = {
     'Object_15': 'Desk Lamp',
     'Object_16': 'Book Pages',
     'Object_17': 'Book Cover',
+    'Wall Fan':  'Wall Fan',
     // Add more as needed: 'Object_XX': 'Friendly Name',
 };
 
-/* ── VIDEO TEXTURES — loaded inside the Canvas via Drei ── */
-function VideoTextures({ scene }) {
-    // useVideoTexture auto-creates a <video> element that loops + autoplays
-    const pcTexture = useVideoTexture('/pc-screen.mp4', {
-        loop: true,
-        muted: true,    // required for autoplay in most browsers
-        start: true,
-    });
+/* ── Black material used when the monitor is OFF ── */
+const blackMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 });
 
-    const windowTexture = useVideoTexture('/window-view.mp4', {
+/* ──────────────────────────────────────────────────────────
+ * MONITOR VIDEO CONTROLLER
+ * Manages the PC screen video texture with fade-in on ON,
+ * instant black on OFF.
+ * ────────────────────────────────────────────────────────── */
+function MonitorController({ scene, deviceStatus }) {
+    const pcTexture = useVideoTexture('/pc-screen.mp4', {
         loop: true,
         muted: true,
         start: true,
     });
 
+    const monitorMeshRef = useRef(null);
+    const videoMaterialRef = useRef(null);
+    const fadeRef = useRef({ active: false, progress: 0 });
+
+    // Find the monitor mesh once the scene is ready
     useEffect(() => {
         if (!scene) return;
-
-        /* ── Fix texture encoding so colors look correct ── */
-        pcTexture.encoding = THREE.sRGBEncoding;
-        windowTexture.encoding = THREE.sRGBEncoding;
-
-        /* ──────────────────────────────────────────────────
-         * TEXTURE FLIP / ROTATION FIX
-         * If a video maps upside-down or mirrored, uncomment
-         * the relevant lines below:
-         *
-         * Flip vertically:
-         *   pcTexture.flipY = false;
-         *
-         * Rotate 180°:
-         *   pcTexture.center.set(0.5, 0.5);
-         *   pcTexture.rotation = Math.PI;
-         *
-         * Rotate 90° clockwise:
-         *   pcTexture.center.set(0.5, 0.5);
-         *   pcTexture.rotation = -Math.PI / 2;
-         *
-         * Mirror horizontally:
-         *   pcTexture.repeat.x = -1;
-         *   pcTexture.wrapS = THREE.RepeatWrapping;
-         * ────────────────────────────────────────────────── */
-
         scene.traverse((child) => {
-            if (!child.isMesh) return;
-
-            // Apply PC screen video to the monitor mesh
-            if (child.name === PC_SCREEN_MESH_NAME) {
-                child.material = new THREE.MeshBasicMaterial({
-                    map: pcTexture,
-                    toneMapped: false,   // keep video colors vibrant (no tone-mapping)
-                });
-                child.material.needsUpdate = true;
-                console.log('[VideoTex] Applied pc-screen.mp4 →', child.name);
-            }
-
-            // Apply window view video to the window mesh
-            if (child.name === WINDOW_MESH_NAME) {
-                child.material = new THREE.MeshBasicMaterial({
-                    map: windowTexture,
-                    toneMapped: false,
-                });
-                child.material.needsUpdate = true;
-                console.log('[VideoTex] Applied window-view.mp4 →', child.name);
+            if (child.isMesh && child.name === PC_SCREEN_MESH_NAME) {
+                monitorMeshRef.current = child;
             }
         });
-    }, [scene, pcTexture, windowTexture]);
+    }, [scene]);
 
-    return null; // This component only applies side-effects
+    // Create the video material once the texture is loaded
+    useEffect(() => {
+        if (!pcTexture) return;
+        pcTexture.encoding = THREE.sRGBEncoding;
+
+        videoMaterialRef.current = new THREE.MeshBasicMaterial({
+            map: pcTexture,
+            toneMapped: false,
+            transparent: true,
+            opacity: 0,
+        });
+    }, [pcTexture]);
+
+    // React to ON/OFF state changes for the monitor
+    useEffect(() => {
+        const mesh = monitorMeshRef.current;
+        if (!mesh) return;
+
+        const isOn = deviceStatus[PC_SCREEN_MESH_NAME] === true;
+
+        if (isOn && videoMaterialRef.current) {
+            // Switch to video material and start fade-in
+            videoMaterialRef.current.opacity = 0;
+            mesh.material = videoMaterialRef.current;
+            mesh.material.needsUpdate = true;
+            fadeRef.current = { active: true, progress: 0 };
+            console.log('[Monitor] Turning ON — starting fade-in');
+        } else {
+            // Instantly switch to black
+            mesh.material = blackMaterial;
+            mesh.material.needsUpdate = true;
+            fadeRef.current = { active: false, progress: 0 };
+            console.log('[Monitor] Turned OFF — black screen');
+        }
+    }, [deviceStatus]);
+
+    // Animate opacity from 0 → 1 over 1.5 seconds
+    useFrame((_, delta) => {
+        if (!fadeRef.current.active) return;
+        if (!videoMaterialRef.current) return;
+
+        const fadeDuration = 1.5; // seconds
+        fadeRef.current.progress += delta / fadeDuration;
+
+        if (fadeRef.current.progress >= 1) {
+            fadeRef.current.progress = 1;
+            fadeRef.current.active = false;
+        }
+
+        videoMaterialRef.current.opacity = fadeRef.current.progress;
+    });
+
+    return null;
+}
+
+/* ──────────────────────────────────────────────────────────
+ * WALL FAN — built from R3F primitives
+ * Cylinder base mount → Sphere motor housing → 4 Box blades
+ * Spins when deviceStatus['Wall Fan'] is true,
+ * smoothly decelerates when turned off.
+ * ────────────────────────────────────────────────────────── */
+function WallFan({ isOn, onPointerDown }) {
+    const bladesRef = useRef();
+    const speedRef = useRef(0);
+
+    const TARGET_SPEED = 15;      // rad/s when ON
+    const ACCELERATION = 8;       // how fast it spins up
+    const DECELERATION = 4;       // how fast it winds down
+
+    useFrame((_, delta) => {
+        if (!bladesRef.current) return;
+
+        // Smoothly ramp speed toward target or zero
+        if (isOn) {
+            speedRef.current = THREE.MathUtils.lerp(
+                speedRef.current,
+                TARGET_SPEED,
+                1 - Math.exp(-ACCELERATION * delta)
+            );
+        } else {
+            speedRef.current = THREE.MathUtils.lerp(
+                speedRef.current,
+                0,
+                1 - Math.exp(-DECELERATION * delta)
+            );
+            // Snap to zero when close enough
+            if (Math.abs(speedRef.current) < 0.01) speedRef.current = 0;
+        }
+
+        bladesRef.current.rotation.z += speedRef.current * delta;
+    });
+
+    const handleClick = useCallback((e) => {
+        e.stopPropagation();
+        console.log('[Raycast] Clicked mesh: Wall Fan');
+        if (onPointerDown) onPointerDown('Wall Fan');
+    }, [onPointerDown]);
+
+    // Shared blade geometry: thin flat box
+    const bladeWidth = 0.35;
+    const bladeLength = 0.08;
+    const bladeDepth = 0.02;
+
+    return (
+        /*
+         * Position & rotation: adjust these to mount on YOUR room's back wall.
+         * position={[x, y, z]}  rotation={[rx, ry, rz]}
+         * The fan faces outward from the wall (along +Z after rotation).
+         */
+        <group
+            position={[0, 1.8, -2.0]}
+            rotation={[0, 0, 0]}
+            onPointerDown={handleClick}
+        >
+            {/* ── Base mount (dark grey cylinder flush to wall) ── */}
+            <mesh position={[0, 0, -0.06]}>
+                <cylinderGeometry args={[0.12, 0.12, 0.12, 24]} />
+                <meshStandardMaterial color="#3a3a3a" metalness={0.6} roughness={0.3} />
+            </mesh>
+
+            {/* ── Arm connecting mount to motor ── */}
+            <mesh position={[0, 0, 0.05]}>
+                <cylinderGeometry args={[0.03, 0.03, 0.2, 12]} />
+                <meshStandardMaterial color="#4a4a4a" metalness={0.5} roughness={0.4} />
+            </mesh>
+
+            {/* ── Motor housing (sphere) ── */}
+            <mesh position={[0, 0, 0.18]}>
+                <sphereGeometry args={[0.1, 24, 24]} />
+                <meshStandardMaterial
+                    color={isOn ? '#60a5fa' : '#555555'}
+                    metalness={0.7}
+                    roughness={0.2}
+                    emissive={isOn ? '#1e40af' : '#000000'}
+                    emissiveIntensity={isOn ? 0.3 : 0}
+                />
+            </mesh>
+
+            {/* ── Blades group (rotates on Z-axis) ── */}
+            <group ref={bladesRef} position={[0, 0, 0.22]}>
+                {[0, 1, 2, 3].map((i) => (
+                    <mesh
+                        key={i}
+                        position={[
+                            Math.cos((i * Math.PI) / 2) * 0.28,
+                            Math.sin((i * Math.PI) / 2) * 0.28,
+                            0,
+                        ]}
+                        rotation={[0, 0, (i * Math.PI) / 2]}
+                    >
+                        <boxGeometry args={[bladeWidth, bladeLength, bladeDepth]} />
+                        <meshStandardMaterial
+                            color="#e2e8f0"
+                            metalness={0.3}
+                            roughness={0.5}
+                            side={THREE.DoubleSide}
+                        />
+                    </mesh>
+                ))}
+            </group>
+
+            {/* ── Nose cap ── */}
+            <mesh position={[0, 0, 0.26]}>
+                <sphereGeometry args={[0.04, 16, 16]} />
+                <meshStandardMaterial color="#2a2a2a" metalness={0.8} roughness={0.2} />
+            </mesh>
+        </group>
+    );
 }
 
 /* ── ROOM MODEL — loads the GLTF, auto-scales, and handles click raycasting ── */
-function RoomModel({ onMeshClick }) {
+function RoomModel({ onMeshClick, deviceStatus }) {
     const { scene } = useGLTF('/room-model/scene.gltf');
     const { camera } = useThree();
 
@@ -136,6 +262,13 @@ function RoomModel({ onMeshClick }) {
             camera.position.set(5, 5, 5);
             camera.lookAt(0, 0, 0);
             camera.updateProjectionMatrix();
+
+            // Set the monitor to black initially
+            scene.traverse((child) => {
+                if (child.isMesh && child.name === PC_SCREEN_MESH_NAME) {
+                    child.material = blackMaterial;
+                }
+            });
 
             // Log all mesh names for debugging
             console.log('[RoomModel] loaded ✔ — meshes in scene:');
@@ -163,8 +296,7 @@ function RoomModel({ onMeshClick }) {
     return (
         <>
             <primitive object={scene} onPointerDown={handlePointerDown} />
-            {/* Video textures are applied as a child so they share the Canvas context */}
-            <VideoTextures scene={scene} />
+            <MonitorController scene={scene} deviceStatus={deviceStatus} />
         </>
     );
 }
@@ -249,6 +381,9 @@ const overlayStyles = {
 export default function Dashboard() {
     const [selectedObject, setSelectedObject] = useState(null);
 
+    // Tracks ON/OFF state per device — keyed by mesh name
+    const [deviceStatus, setDeviceStatus] = useState({});
+
     // Only open the panel if the mesh has a friendly name in the dictionary
     const handleMeshClick = useCallback((name) => {
         if (friendlyNames[name]) {
@@ -262,11 +397,13 @@ export default function Dashboard() {
 
     const handleTurnOn = useCallback(() => {
         console.log(`[SmartHome] Turning ON: ${selectedObject}`);
+        setDeviceStatus((prev) => ({ ...prev, [selectedObject]: true }));
         // TODO: send command to backend
     }, [selectedObject]);
 
     const handleTurnOff = useCallback(() => {
         console.log(`[SmartHome] Turning OFF: ${selectedObject}`);
+        setDeviceStatus((prev) => ({ ...prev, [selectedObject]: false }));
         // TODO: send command to backend
     }, [selectedObject]);
 
@@ -302,8 +439,17 @@ export default function Dashboard() {
                 <directionalLight position={[10, 10, 5]} intensity={1.5} />
 
                 <Suspense fallback={null}>
-                    <RoomModel onMeshClick={handleMeshClick} />
+                    <RoomModel
+                        onMeshClick={handleMeshClick}
+                        deviceStatus={deviceStatus}
+                    />
                 </Suspense>
+
+                {/* ── Custom Wall Fan (outside GLTF, R3F primitives) ── */}
+                <WallFan
+                    isOn={deviceStatus['Wall Fan'] === true}
+                    onPointerDown={handleMeshClick}
+                />
 
                 <OrbitControls
                     enablePan={false}
