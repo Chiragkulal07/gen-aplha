@@ -170,12 +170,17 @@ function WallFan({ isOn, onPointerDown }) {
 
     return (
         /*
-         * Position & rotation: adjust these to mount on YOUR room's back wall.
-         * position={[x, y, z]}  rotation={[rx, ry, rz]}
-         * The fan faces outward from the wall (along +Z after rotation).
+         * ── WALL FAN POSITIONING ──────────────────────────────
+         * To nudge the fan, tweak the three numbers in position={[X, Y, Z]}:
+         *   X  → left / right   (decrease to move LEFT, increase to move RIGHT)
+         *   Y  → up / down      (increase to move UP, decrease to move DOWN)
+         *   Z  → toward / away from back wall (decrease to push CLOSER to wall)
+         *
+         * Current:  position={[-1.9, 1.35, -2.48]}
+         * rotation {[0, 0, 0]} keeps the fan facing into the room.
          */
         <group
-            position={[0, 1.8, -2.0]}
+            position={[-1.9, 1.35, -2.48]}
             rotation={[0, 0, 0]}
             onPointerDown={handleClick}
         >
@@ -378,6 +383,50 @@ const overlayStyles = {
     },
 };
 
+/* ──────────────────────────────────────────────────────────
+ * ROOM LIGHTS (MASTER SWITCH)
+ * Bound to the Bedside Lamp ('Object_49'). If ON (or undefined),
+ * the room is bright. If OFF, transitions smoothly to a dark/moody state.
+ * ────────────────────────────────────────────────────────── */
+function RoomLights({ deviceStatus }) {
+    const ambientRef = useRef(null);
+    const directionalRef = useRef(null);
+
+    // If undefined (initial load), treat as ON so it starts bright
+    const isLampOn = deviceStatus['Object_49'] !== false;
+
+    // The user-requested targets for ON vs. OFF
+    const targetAmbient = isLampOn ? 1.5 : 0.2;
+    const targetDirectional = isLampOn ? 1 : 0.1;
+
+    useFrame((_, delta) => {
+        if (!ambientRef.current || !directionalRef.current) return;
+
+        // speed=5 yields ~99% completion over 1 second (1 - e^-5)
+        const speed = 5;
+        
+        ambientRef.current.intensity = THREE.MathUtils.lerp(
+            ambientRef.current.intensity,
+            targetAmbient,
+            1 - Math.exp(-speed * delta)
+        );
+
+        directionalRef.current.intensity = THREE.MathUtils.lerp(
+            directionalRef.current.intensity,
+            targetDirectional,
+            1 - Math.exp(-speed * delta)
+        );
+    });
+
+    return (
+        <>
+            {/* Initialize with 'ON' values so the first frame is correct */}
+            <ambientLight ref={ambientRef} intensity={1.5} />
+            <directionalLight ref={directionalRef} position={[10, 10, 5]} intensity={1} />
+        </>
+    );
+}
+
 export default function Dashboard() {
     const [selectedObject, setSelectedObject] = useState(null);
 
@@ -435,8 +484,8 @@ export default function Dashboard() {
             <Canvas camera={{ position: [5, 5, 5], fov: 35 }}>
                 <color attach="background" args={['#1e1e1e']} />
 
-                <ambientLight intensity={2} />
-                <directionalLight position={[10, 10, 5]} intensity={1.5} />
+                {/* ── Dynamic Room Lighting ── */}
+                <RoomLights deviceStatus={deviceStatus} />
 
                 <Suspense fallback={null}>
                     <RoomModel
