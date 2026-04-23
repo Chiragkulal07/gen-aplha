@@ -164,7 +164,7 @@ function WallFan({ isOn, onPointerDown }) {
     }, [onPointerDown]);
 
     // Shared blade geometry: thin flat box
-    const bladeWidth = 0.35;
+    const bladeWidth = 1.35;
     const bladeLength = 0.08;
     const bladeDepth = 0.02;
 
@@ -180,8 +180,8 @@ function WallFan({ isOn, onPointerDown }) {
          * rotation {[0, 0, 0]} keeps the fan facing into the room.
          */
         <group
-            position={[-1.9, 1.35, -2.48]}
-            rotation={[0, 0, 0]}
+            position={[-4.5, 1.35, -2.48]}
+            rotation={[0, 1.5, 0]}
             onPointerDown={handleClick}
         >
             {/* ── Base mount (dark grey cylinder flush to wall) ── */}
